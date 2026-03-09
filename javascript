@@ -3,515 +3,771 @@ function sendChurchReport() {
   // Παίρνουμε το ενεργό Google Spreadsheet
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  // Το email που θα λαμβάνει την αναφορά
+  // Το email του παραλήπτη της αναφοράς
   const recipient = "pergiorgos13@gmail.com";
 
-  // Πόσες μέρες πριν από λήξη φαρμάκου να ειδοποιεί
+  // Πόσες μέρες πριν από λήξη φαρμάκου να θεωρείται "λήγει σύντομα"
   const medicineWarningDays = 30;
 
-  // Πόσες μέρες πριν από συντήρηση να ειδοποιεί
-  const maintenanceWarningDays = 30;
+  // Πόσες μέρες πριν από συντήρηση να εμφανίζεται στην αναφορά
+  const maintenanceWarningDays = 45;
 
+  // Παίρνουμε τη ζώνη ώρας του script για σωστή μορφοποίηση ημερομηνιών
+  const timeZone = Session.getScriptTimeZone();
 
+  // Παίρνουμε τη σημερινή ημερομηνία
+  const today = new Date();
 
-  // =====================================================
-  // ΒΑΣΙΚΗ ΔΟΜΗ ΔΕΔΟΜΕΝΩΝ ΤΟΥ REPORT
-  // =====================================================
+  // Μηδενίζουμε ώρα/λεπτά/δευτερόλεπτα για πιο σωστές συγκρίσεις ημερομηνιών
+  today.setHours(0, 0, 0, 0);
+
+  // Δημιουργούμε την ημερομηνία αναφοράς σε μορφή dd/MM/yyyy
+  const reportDate = Utilities.formatDate(today, timeZone, "dd/MM/yyyy");
+
+  // Δημιουργούμε όριο για "λήγει σύντομα" στα φάρμακα
+  const medicineLimit = new Date(today);
+  medicineLimit.setDate(medicineLimit.getDate() + medicineWarningDays);
+
+  // Δημιουργούμε όριο για "προσεχής συντήρηση"
+  const maintenanceLimit = new Date(today);
+  maintenanceLimit.setDate(maintenanceLimit.getDate() + maintenanceWarningDays);
+
+  // Κεντρική δομή δεδομένων της αναφοράς
   const report = {
-    "Καθαριότητα": {
+    cleanliness: {
+      title: "Καθαριότητα",
       buy: [],
       low: []
     },
-    "Τράπεζα Αγάπης": {
+    loveBank: {
+      title: "Τράπεζα Αγάπης",
       buy: [],
       low: []
     },
-    "Φαρμακείο": {
-      expiring: []
+    pharmacy: {
+      title: "Φαρμακείο",
+      expiringSoon: [],
+      expired: []
     },
-    "Συντήρηση": {
+    maintenance: {
+      title: "Συντήρηση",
       upcoming: []
     }
   };
 
-
-
-  // =====================================================
-  // ΣΥΝΑΡΤΗΣΗ: ΜΕΤΑΤΡΕΠΕΙ ΜΙΑ ΤΙΜΗ ΣΕ ΑΡΙΘΜΟ ΜΕ ΑΣΦΑΛΕΙΑ
-  // =====================================================
+  // Μετατρέπει με ασφάλεια μια τιμή σε αριθμό
   function toNumber(value) {
-
-    // Αν το κελί είναι κενό επιστρέφουμε null
-    if (value === "" || value === null || value === undefined) {
-      return null;
-    }
-
-    // Προσπαθούμε να μετατρέψουμε την τιμή σε αριθμό
+    if (value === "" || value === null || value === undefined) return null;
     const num = Number(value);
-
-    // Αν δεν είναι αριθμός επιστρέφουμε null
-    if (isNaN(num)) {
-      return null;
-    }
-
-    // Αλλιώς επιστρέφουμε τον αριθμό
-    return num;
+    return isNaN(num) ? null : num;
   }
 
+  // Κάνει escape ειδικούς χαρακτήρες για να μην σπάσει το HTML
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
 
+  // Επιστρέφει σωστό ελληνικό όρο για ενικό/πληθυντικό
+  function countLabel(count, singular, plural) {
+    return count === 1 ? singular : plural;
+  }
 
-  // =====================================================
-  // ΕΛΕΓΧΟΣ ΑΠΟΘΗΚΗΣ
-  // =====================================================
+  // Υπολογίζει πόσες μέρες απομένουν μέχρι μια ημερομηνία
+  function daysUntil(dateObj) {
+    const target = new Date(dateObj);
+    target.setHours(0, 0, 0, 0);
+    const diffMs = target.getTime() - today.getTime();
+    return Math.round(diffMs / (1000 * 60 * 60 * 24));
+  }
+
+  // Δημιουργεί badge / pill
+  function createPill(text, bgColor, textColor) {
+    return `
+      <span style="display:inline-block; padding:4px 10px; font-size:11px; font-weight:700; border-radius:999px; background-color:${bgColor}; color:${textColor};">
+        ${escapeHtml(text)}
+      </span>
+    `;
+  }
+
+  // Δημιουργεί το κενό μήνυμα όταν δεν υπάρχουν καταχωρήσεις
+  function createEmptyBox(text) {
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+        <tr>
+          <td style="padding:14px 16px; border:1px dashed #d6dde8; border-radius:12px; background-color:#f8fafc; font-size:14px; color:#6b7280;">
+            ${escapeHtml(text)}
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  // 1. Έλεγχος αποθήκης
   const inventorySheets = [
-    { name: "Καθαριότητα ", label: "Καθαριότητα" },
-    { name: "Τράπεζα Αγάπης ", label: "Τράπεζα Αγάπης" }
+    { sheetName: "Καθαριότητα ", targetKey: "cleanliness" },
+    { sheetName: "Τράπεζα Αγάπης ", targetKey: "loveBank" }
   ];
 
-  // Για κάθε φύλλο αποθήκης
   inventorySheets.forEach(config => {
-
-    // Παίρνουμε το φύλλο από το spreadsheet
-    const sheet = ss.getSheetByName(config.name);
-
-    // Αν δεν υπάρχει, το προσπερνάμε
+    const sheet = ss.getSheetByName(config.sheetName);
     if (!sheet) return;
 
-    // Παίρνουμε όλα τα δεδομένα του φύλλου
     const data = sheet.getDataRange().getValues();
 
-    // Ξεκινάμε από τη 2η γραμμή γιατί η 1η έχει επικεφαλίδες
     for (let i = 1; i < data.length; i++) {
-
-      // Στήλη A = Κατηγορία
-      const category = data[i][0];
-
-      // Στήλη B = Είδος
       const item = data[i][1];
-
-      // Στήλη C = Ελάχιστη ποσότητα
       const minQty = toNumber(data[i][2]);
-
-      // Στήλη D = Ποσότητα
       const qty = toNumber(data[i][3]);
 
-      // Αν δεν υπάρχει είδος, προσπερνάμε
       if (!item) continue;
-
-      // Αν λείπουν αριθμοί, προσπερνάμε
       if (minQty === null || qty === null) continue;
 
-      // Αν η ποσότητα είναι μικρότερη από την ελάχιστη → προς αγορά
       if (qty < minQty) {
-        report[config.label].buy.push({
+        report[config.targetKey].buy.push({
           item: item,
-          category: category || "-",
           qty: qty,
-          min: minQty,
+          minQty: minQty,
           missing: minQty - qty
         });
-      }
-
-      // Αν η ποσότητα είναι ίση με την ελάχιστη → χαμηλό απόθεμα
-      else if (qty === minQty) {
-        report[config.label].low.push({
+      } else if (qty === minQty) {
+        report[config.targetKey].low.push({
           item: item,
-          category: category || "-",
           qty: qty,
-          min: minQty
+          minQty: minQty
         });
       }
     }
   });
 
-
-
-  // =====================================================
-  // ΕΛΕΓΧΟΣ ΦΑΡΜΑΚΕΙΟΥ
-  // =====================================================
+  // 2. Έλεγχος φαρμακείου
   const pharmacySheet = ss.getSheetByName("Φαρμακείο ");
 
   if (pharmacySheet) {
-
-    // Παίρνουμε όλα τα δεδομένα του φύλλου
     const data = pharmacySheet.getDataRange().getValues();
 
-    // Σημερινή ημερομηνία
-    const today = new Date();
-
-    // Δημιουργούμε ημερομηνία ορίου
-    const limit = new Date();
-
-    // Προσθέτουμε τις μέρες ειδοποίησης
-    limit.setDate(today.getDate() + medicineWarningDays);
-
-    // Ξεκινάμε από τη 2η γραμμή
     for (let i = 1; i < data.length; i++) {
+      const medicineName = data[i][0];
+      const expiryDate = data[i][1];
 
-      // Στήλη A = Όνομα φαρμάκου
-      const name = data[i][0];
+      if (!medicineName || !expiryDate) continue;
+      if (!(expiryDate instanceof Date)) continue;
 
-      // Στήλη B = Ημερομηνία λήξης
-      const expiry = data[i][1];
+      const cleanExpiry = new Date(expiryDate);
+      cleanExpiry.setHours(0, 0, 0, 0);
 
-      // Αν λείπει όνομα ή ημερομηνία, προσπερνάμε
-      if (!name || !expiry) continue;
+      const formattedDate = Utilities.formatDate(cleanExpiry, timeZone, "dd/MM/yyyy");
 
-      // Αν είναι κανονική ημερομηνία
-      if (expiry instanceof Date) {
-
-        // Αν λήγει μέσα στο όριο ειδοποίησης
-        if (expiry <= limit) {
-          report["Φαρμακείο"].expiring.push({
-            item: name,
-            date: Utilities.formatDate(
-              expiry,
-              Session.getScriptTimeZone(),
-              "dd/MM/yyyy"
-            )
-          });
-        }
+      if (cleanExpiry < today) {
+        report.pharmacy.expired.push({
+          item: medicineName,
+          date: formattedDate
+        });
+      } else if (cleanExpiry <= medicineLimit) {
+        report.pharmacy.expiringSoon.push({
+          item: medicineName,
+          date: formattedDate
+        });
       }
     }
   }
 
-
-
-  // =====================================================
-  // ΕΛΕΓΧΟΣ ΣΥΝΤΗΡΗΣΗΣ
-  // =====================================================
+  // 3. Έλεγχος συντήρησης
   const maintenanceSheet = ss.getSheetByName("Συντήρηση ");
 
   if (maintenanceSheet) {
-
-    // Παίρνουμε τα δεδομένα του φύλλου
     const data = maintenanceSheet.getDataRange().getValues();
 
-    // Σημερινή ημερομηνία
-    const today = new Date();
-
-    // Ημερομηνία ορίου
-    const limit = new Date();
-
-    // Προσθέτουμε τις μέρες ειδοποίησης
-    limit.setDate(today.getDate() + maintenanceWarningDays);
-
-    // Ξεκινάμε από τη 2η γραμμή
     for (let i = 1; i < data.length; i++) {
+      const itemName = data[i][0];
+      const nextActionDate = data[i][2];
 
-      // Στήλη A = Είδος
-      const item = data[i][0];
+      if (!itemName || !nextActionDate) continue;
+      if (!(nextActionDate instanceof Date)) continue;
 
-      // Στήλη C = Επόμενη ενέργεια
-      const next = data[i][2];
+      const cleanNextAction = new Date(nextActionDate);
+      cleanNextAction.setHours(0, 0, 0, 0);
 
-      // Αν λείπει είδος ή ημερομηνία, προσπερνάμε
-      if (!item || !next) continue;
-
-      // Αν είναι ημερομηνία
-      if (next instanceof Date) {
-
-        // Αν είναι μέσα στο όριο ειδοποίησης
-        if (next <= limit) {
-          report["Συντήρηση"].upcoming.push({
-            item: item,
-            date: Utilities.formatDate(
-              next,
-              Session.getScriptTimeZone(),
-              "dd/MM/yyyy"
-            )
-          });
-        }
+      if (cleanNextAction <= maintenanceLimit) {
+        report.maintenance.upcoming.push({
+          item: itemName,
+          date: Utilities.formatDate(cleanNextAction, timeZone, "dd/MM/yyyy"),
+          daysLeft: daysUntil(cleanNextAction)
+        });
       }
     }
   }
 
+  // 4. Ταξινόμηση
+  report.cleanliness.buy.sort((a, b) => b.missing - a.missing);
+  report.loveBank.buy.sort((a, b) => b.missing - a.missing);
 
+  report.cleanliness.low.sort((a, b) => String(a.item).localeCompare(String(b.item), "el"));
+  report.loveBank.low.sort((a, b) => String(a.item).localeCompare(String(b.item), "el"));
 
-  // =====================================================
-  // ΥΠΟΛΟΓΙΣΜΟΣ ΣΥΝΟΛΩΝ ΓΙΑ ΤΟ HEADER
-  // =====================================================
-  const totalBuy =
-    report["Καθαριότητα"].buy.length +
-    report["Τράπεζα Αγάπης"].buy.length;
+  report.pharmacy.expired.sort((a, b) => a.date.localeCompare(b.date, "el"));
+  report.pharmacy.expiringSoon.sort((a, b) => a.date.localeCompare(b.date, "el"));
 
-  const totalLow =
-    report["Καθαριότητα"].low.length +
-    report["Τράπεζα Αγάπης"].low.length;
+  report.maintenance.upcoming.sort((a, b) => a.daysLeft - b.daysLeft);
 
-  const totalExpiring = report["Φαρμακείο"].expiring.length;
+  // 5. Υπολογισμός συνόλων
+  const totalBuy = report.cleanliness.buy.length + report.loveBank.buy.length;
+  const totalLow = report.cleanliness.low.length + report.loveBank.low.length;
+  const totalExpired = report.pharmacy.expired.length;
+  const totalUpcomingMaintenance = report.maintenance.upcoming.length;
 
-  const totalUpcoming = report["Συντήρηση"].upcoming.length;
+  const urgentItems = [];
 
-  const reportDate = Utilities.formatDate(
-    new Date(),
-    Session.getScriptTimeZone(),
-    "dd/MM/yyyy"
-  );
+  report.pharmacy.expired.forEach(item => {
+    urgentItems.push({
+      type: "expiredMedicine",
+      item: item.item,
+      date: item.date
+    });
+  });
 
-
-
-  // =====================================================
-  // ΣΥΝΑΡΤΗΣΗ ΠΟΥ ΦΤΙΑΧΝΕΙ ΚΑΡΤΕΣ ΓΙΑ ΑΠΟΘΗΚΗ
-  // =====================================================
-  function createInventoryTable(items, type) {
-
-    // Αν δεν υπάρχουν στοιχεία επιστρέφουμε ήρεμο μήνυμα
-    if (items.length === 0) {
-      return `
-        <div style="padding:14px 16px; background:#f8fafc; border:1px dashed #d6dde8; border-radius:10px; color:#6b7280; font-size:14px;">
-          Δεν υπάρχουν καταχωρήσεις.
-        </div>
-      `;
+  report.cleanliness.buy.forEach(item => {
+    if (item.missing >= 5) {
+      urgentItems.push({
+        type: "buy",
+        item: item.item,
+        extra: `Χρειάζονται τουλάχιστον ακόμη: ${item.missing}`
+      });
     }
+  });
 
-    // Ξεκινάμε HTML table
-    let html = `
-      <table style="width:100%; border-collapse:collapse;">
-    `;
+  report.loveBank.buy.forEach(item => {
+    if (item.missing >= 5) {
+      urgentItems.push({
+        type: "buy",
+        item: item.item,
+        extra: `Χρειάζονται τουλάχιστον ακόμη: ${item.missing}`
+      });
+    }
+  });
 
-    // Για κάθε γραμμή
-    items.forEach(row => {
+  const totalUrgent = urgentItems.length;
 
-      // Αν είναι "προς αγορά" δείχνουμε και πόσα λείπουν
-      const extraInfo = type === "buy"
-        ? `<div style="margin-top:4px; font-size:12px; color:#b91c1c;">Λείπουν ακόμη: ${row.missing}</div>`
-        : ``;
+  // 6. Συναρτήσεις HTML
 
-      html += `
+  // Κάρτα προϊόντος προς αγορά χωρίς "Κατηγορία" και χωρίς badge
+  function createBuyCard(row) {
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; margin-bottom:12px;">
         <tr>
-          <td style="padding:14px 12px; border-bottom:1px solid #edf1f5;">
-            <div style="font-size:15px; font-weight:700; color:#111827;">${row.item}</div>
-            <div style="margin-top:4px; font-size:12px; color:#6b7280;">Κατηγορία: ${row.category}</div>
-            <div style="margin-top:4px; font-size:12px; color:#6b7280;">Ποσότητα: ${row.qty} | Ελάχιστη: ${row.min}</div>
-            ${extraInfo}
+          <td style="padding:16px 14px; border:1px solid #edf1f5; border-radius:12px; background-color:#fffafa;">
+            <div style="font-size:15px; font-weight:700; color:#111827;">
+              ${escapeHtml(row.item)}
+            </div>
+            <div style="margin-top:5px; font-size:13px; line-height:1.5; color:#b91c1c;">
+              Πρέπει να αγοραστούν τουλάχιστον: ${escapeHtml(row.missing)}
+            </div>
           </td>
         </tr>
-      `;
-    });
-
-    // Κλείνουμε table
-    html += `</table>`;
-
-    return html;
+      </table>
+    `;
   }
 
-
-
-  // =====================================================
-  // ΣΥΝΑΡΤΗΣΗ ΠΟΥ ΦΤΙΑΧΝΕΙ ΚΑΡΤΕΣ ΜΕ ΗΜΕΡΟΜΗΝΙΕΣ
-  // =====================================================
-  function createDateTable(items, label) {
-
-    // Αν δεν υπάρχουν στοιχεία
-    if (items.length === 0) {
-      return `
-        <div style="padding:14px 16px; background:#f8fafc; border:1px dashed #d6dde8; border-radius:10px; color:#6b7280; font-size:14px;">
-          Δεν υπάρχουν καταχωρήσεις.
-        </div>
-      `;
-    }
-
-    let html = `
-      <table style="width:100%; border-collapse:collapse;">
-    `;
-
-    items.forEach(row => {
-      html += `
+  // Κάρτα χαμηλού αποθέματος χωρίς "Κατηγορία" και χωρίς badge
+  function createLowCard(row) {
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; margin-bottom:12px;">
         <tr>
-          <td style="padding:14px 12px; border-bottom:1px solid #edf1f5;">
-            <div style="font-size:15px; font-weight:700; color:#111827;">${row.item}</div>
-            <div style="margin-top:4px; font-size:12px; color:#6b7280;">${label}: ${row.date}</div>
+          <td style="padding:16px 14px; border:1px solid #edf1f5; border-radius:12px; background-color:#fffaf3;">
+            <div style="font-size:15px; font-weight:700; color:#111827;">
+              ${escapeHtml(row.item)}
+            </div>
+            <div style="margin-top:5px; font-size:13px; line-height:1.5; color:#b45309;">
+              Το απόθεμα έφτασε στο όριο.
+            </div>
           </td>
         </tr>
-      `;
+      </table>
+    `;
+  }
+
+  function createExpiringMedicineCard(row) {
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; margin-bottom:12px;">
+        <tr>
+          <td style="padding:16px 14px; border:1px solid #edf1f5; border-radius:12px; background-color:#fffaf3;">
+            <div style="margin-bottom:8px;">
+              ${createPill("ΛΗΓΕΙ ΣΥΝΤΟΜΑ", "#fef3c7", "#b45309")}
+            </div>
+            <div style="font-size:15px; font-weight:700; color:#111827;">
+              ${escapeHtml(row.item)}
+            </div>
+            <div style="margin-top:5px; font-size:13px; line-height:1.5; color:#b45309;">
+              Λήγει στις: ${escapeHtml(row.date)}
+            </div>
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  function createExpiredMedicineCard(row) {
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; margin-bottom:12px;">
+        <tr>
+          <td style="padding:16px 14px; border:1px solid #edf1f5; border-radius:12px; background-color:#fff7f7;">
+            <div style="margin-bottom:8px;">
+              ${createPill("ΕΛΗΞΕ", "#fee2e2", "#b91c1c")}
+            </div>
+            <div style="font-size:15px; font-weight:700; color:#111827;">
+              ${escapeHtml(row.item)}
+            </div>
+            <div style="margin-top:5px; font-size:13px; line-height:1.5; color:#991b1b;">
+              Έληξε στις: ${escapeHtml(row.date)}
+            </div>
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  function createMaintenanceCard(row) {
+    const daysText = row.daysLeft < 0
+      ? `Έχει καθυστερήσει: ${Math.abs(row.daysLeft)} ${Math.abs(row.daysLeft) === 1 ? "μέρα" : "μέρες"}`
+      : `Απομένουν: ${row.daysLeft} ${row.daysLeft === 1 ? "μέρα" : "μέρες"}`;
+
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; margin-bottom:12px;">
+        <tr>
+          <td style="padding:16px 14px; border:1px solid #edf1f5; border-radius:12px; background-color:#f8fafc;">
+            <div style="margin-bottom:8px;">
+              ${createPill("ΠΡΟΓΡΑΜΜΑΤΙΣΜΟΣ", "#dbeafe", "#1d4ed8")}
+            </div>
+            <div style="font-size:15px; font-weight:700; color:#111827;">
+              ${escapeHtml(row.item)}
+            </div>
+            <div style="margin-top:5px; font-size:13px; line-height:1.5; color:#475569;">
+              Επόμενη συντήρηση: ${escapeHtml(row.date)}
+            </div>
+            <div style="margin-top:4px; font-size:13px; line-height:1.5; color:#475569;">
+              ${escapeHtml(daysText)}
+            </div>
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  function createUrgentSection() {
+    if (urgentItems.length === 0) {
+      return "";
+    }
+
+    let itemsHtml = "";
+
+    urgentItems.forEach(row => {
+      if (row.type === "expiredMedicine") {
+        itemsHtml += `
+          <tr>
+            <td style="padding:14px 0 0 0;">
+              <div style="margin-bottom:8px;">
+                ${createPill("ΕΛΗΞΕ", "#fee2e2", "#b91c1c")}
+              </div>
+              <div style="font-size:15px; font-weight:700; color:#111827;">
+                ${escapeHtml(row.item)}
+              </div>
+              <div style="margin-top:5px; font-size:13px; line-height:1.5; color:#991b1b;">
+                Έληξε στις: ${escapeHtml(row.date)}
+              </div>
+            </td>
+          </tr>
+        `;
+      } else if (row.type === "buy") {
+        itemsHtml += `
+          <tr>
+            <td style="padding:14px 0 0 0;">
+              <div style="margin-bottom:8px;">
+                ${createPill("ΑΜΕΣΗ ΑΓΟΡΑ", "#fee2e2", "#b91c1c")}
+              </div>
+              <div style="font-size:15px; font-weight:700; color:#111827;">
+                ${escapeHtml(row.item)}
+              </div>
+              <div style="margin-top:5px; font-size:13px; line-height:1.5; color:#991b1b;">
+                ${escapeHtml(row.extra)}
+              </div>
+            </td>
+          </tr>
+        `;
+      }
     });
 
-    html += `</table>`;
-
-    return html;
-  }
-
-
-
-  // =====================================================
-  // ΣΥΝΑΡΤΗΣΗ ΠΟΥ ΦΤΙΑΧΝΕΙ ΤΟ ΠΛΑΙΣΙΟ ΚΑΘΕ ΚΥΡΙΑΣ ΕΝΟΤΗΤΑΣ
-  // =====================================================
-  function createMainSection(title, emoji, content) {
     return `
-      <div style="margin-bottom:24px; background:#ffffff; border:1px solid #e5eaf0; border-radius:16px; overflow:hidden;">
-        <div style="padding:16px 20px; background:#f8fafc; border-bottom:1px solid #e5eaf0;">
-          <div style="font-size:18px; font-weight:800; color:#0f172a;">${emoji} ${title}</div>
-        </div>
-        <div style="padding:20px;">
-          ${content}
-        </div>
-      </div>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:24px; border-collapse:separate; border-spacing:0; background-color:#fff7f7; border:1px solid #fecaca; border-radius:16px;">
+        <tr>
+          <td style="padding:18px 20px;">
+            <div style="font-size:16px; font-weight:800; color:#991b1b; margin-bottom:12px;">
+              Άμεση προσοχή
+            </div>
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+              ${itemsHtml}
+            </table>
+          </td>
+        </tr>
+      </table>
     `;
   }
 
-
-
-  // =====================================================
-  // ΣΥΝΑΡΤΗΣΗ ΠΟΥ ΦΤΙΑΧΝΕΙ ΥΠΟΕΝΟΤΗΤΕΣ
-  // =====================================================
-  function createSubSection(title, count, color, content) {
+  function createSummarySection() {
     return `
-      <div style="margin-bottom:18px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-          <div style="font-size:15px; font-weight:700; color:${color};">${title}</div>
-          <div style="background:${color}; color:#ffffff; font-size:12px; font-weight:700; padding:4px 10px; border-radius:999px;">
-            ${count}
-          </div>
-        </div>
-        ${content}
-      </div>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:24px; border-collapse:separate; border-spacing:0; background-color:#ffffff; border:1px solid #e5eaf0; border-radius:16px;">
+        <tr>
+          <td style="padding:18px 20px;">
+            <div style="font-size:15px; font-weight:800; color:#0f172a; margin-bottom:14px;">
+              Σύνοψη ενεργειών
+            </div>
+
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+              <tr>
+                <td style="padding:8px 0; font-size:13px; color:#475569; border-bottom:1px solid #eef2f7;">
+                  Άμεσες ενέργειες
+                </td>
+                <td align="right" style="padding:8px 0; font-size:13px; font-weight:700; color:#111827; border-bottom:1px solid #eef2f7;">
+                  ${totalUrgent}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0; font-size:13px; color:#475569; border-bottom:1px solid #eef2f7;">
+                  Προς αγορά
+                </td>
+                <td align="right" style="padding:8px 0; font-size:13px; font-weight:700; color:#111827; border-bottom:1px solid #eef2f7;">
+                  ${totalBuy}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0; font-size:13px; color:#475569; border-bottom:1px solid #eef2f7;">
+                  Χαμηλό απόθεμα
+                </td>
+                <td align="right" style="padding:8px 0; font-size:13px; font-weight:700; color:#111827; border-bottom:1px solid #eef2f7;">
+                  ${totalLow}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:8px 0; font-size:13px; color:#475569;">
+                  Προσεχείς συντηρήσεις
+                </td>
+                <td align="right" style="padding:8px 0; font-size:13px; font-weight:700; color:#111827;">
+                  ${totalUpcomingMaintenance}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
     `;
   }
 
+  // Εδώ μπαίνουν οι υποκατηγορίες "Προς αγορά" και "Χαμηλό απόθεμα"
+  function createInventorySection(icon, title, buyItems, lowItems) {
+    const totalItems = buyItems.length + lowItems.length;
+    const totalLabel = countLabel(totalItems, "εκκρεμότητα", "εκκρεμότητες");
 
+    let innerHtml = "";
 
-  // =====================================================
-  // ΔΗΜΙΟΥΡΓΙΑ HTML EMAIL
-  // =====================================================
+    if (buyItems.length > 0) {
+      innerHtml += `
+        <div style="font-size:14px; font-weight:800; color:#991b1b; margin-bottom:12px;">
+          Προς αγορά
+        </div>
+      `;
+      buyItems.forEach(row => {
+        innerHtml += createBuyCard(row);
+      });
+    }
+
+    if (lowItems.length > 0) {
+      innerHtml += `
+        <div style="font-size:14px; font-weight:800; color:#b45309; margin-bottom:12px; margin-top:${buyItems.length > 0 ? "16px" : "0"};">
+          Χαμηλό απόθεμα
+        </div>
+      `;
+      lowItems.forEach(row => {
+        innerHtml += createLowCard(row);
+      });
+    }
+
+    if (totalItems === 0) {
+      innerHtml = createEmptyBox("Δεν υπάρχουν εκκρεμότητες σε αυτή την ενότητα.");
+    }
+
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:24px; border-collapse:separate; border-spacing:0; background-color:#ffffff; border:1px solid #e5eaf0; border-radius:16px;">
+        <tr>
+          <td style="padding:16px 20px; background-color:#f8fafc; border-bottom:1px solid #e5eaf0;">
+            <div style="font-size:18px; font-weight:800; color:#0f172a;">
+              ${icon} ${escapeHtml(title)} — ${totalItems} ${totalLabel}
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px;">
+            ${innerHtml}
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  function createPharmacySection() {
+    const totalItems = report.pharmacy.expiringSoon.length + report.pharmacy.expired.length;
+    const totalLabel = countLabel(totalItems, "καταχώριση", "καταχωρίσεις");
+
+    let html = "";
+
+    if (report.pharmacy.expiringSoon.length > 0) {
+      html += `
+        <div style="font-size:14px; font-weight:800; color:#92400e; margin-bottom:12px;">
+          Λήγουν σύντομα
+        </div>
+      `;
+      report.pharmacy.expiringSoon.forEach(row => {
+        html += createExpiringMedicineCard(row);
+      });
+    }
+
+    if (report.pharmacy.expired.length > 0) {
+      html += `
+        <div style="font-size:14px; font-weight:800; color:#991b1b; margin-bottom:12px; margin-top:${report.pharmacy.expiringSoon.length > 0 ? "16px" : "0"};">
+          Έχουν λήξει
+        </div>
+      `;
+      report.pharmacy.expired.forEach(row => {
+        html += createExpiredMedicineCard(row);
+      });
+    }
+
+    if (totalItems === 0) {
+      html = createEmptyBox("Δεν υπάρχουν φάρμακα που λήγουν ή έχουν λήξει.");
+    }
+
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:24px; border-collapse:separate; border-spacing:0; background-color:#ffffff; border:1px solid #e5eaf0; border-radius:16px;">
+        <tr>
+          <td style="padding:16px 20px; background-color:#f8fafc; border-bottom:1px solid #e5eaf0;">
+            <div style="font-size:18px; font-weight:800; color:#0f172a;">
+              💊 Φαρμακείο — ${totalItems} ${totalLabel}
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px;">
+            ${html}
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  function createMaintenanceSection() {
+    const totalItems = report.maintenance.upcoming.length;
+    const totalLabel = countLabel(totalItems, "καταχώριση", "καταχωρίσεις");
+
+    let html = "";
+
+    if (totalItems === 0) {
+      html = createEmptyBox("Δεν υπάρχουν προσεχείς συντηρήσεις στο επιλεγμένο χρονικό όριο.");
+    } else {
+      report.maintenance.upcoming.forEach(row => {
+        html += createMaintenanceCard(row);
+      });
+    }
+
+    return `
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-bottom:0; border-collapse:separate; border-spacing:0; background-color:#ffffff; border:1px solid #e5eaf0; border-radius:16px;">
+        <tr>
+          <td style="padding:16px 20px; background-color:#f8fafc; border-bottom:1px solid #e5eaf0;">
+            <div style="font-size:18px; font-weight:800; color:#0f172a;">
+              🛠️ Συντήρηση — ${totalItems} ${totalLabel}
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px;">
+            ${html}
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
   const htmlBody = `
-    <div style="margin:0; padding:0; background:#eef2f7; font-family:Arial, Helvetica, sans-serif;">
-      <div style="max-width:860px; margin:0 auto; padding:30px 16px;">
+<!DOCTYPE html>
+<html lang="el">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Αναφορά Υλικών Εκκλησίας</title>
+</head>
+<body style="margin:0; padding:0; background-color:#eef2f7; font-family:Arial, Helvetica, sans-serif;">
 
-        <div style="background:#ffffff; border-radius:22px; overflow:hidden; box-shadow:0 8px 30px rgba(15, 23, 42, 0.08);">
+  <div style="width:100%; background-color:#eef2f7; padding:30px 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+      <tr>
+        <td align="center" style="padding:0 16px;">
 
-          <div style="background:linear-gradient(135deg, #0d47a1, #1565c0); padding:28px 24px; color:#ffffff;">
-            <div style="font-size:26px; font-weight:800; line-height:1.2;">Αναφορά Υλικών Εκκλησίας</div>
-            <div style="margin-top:8px; font-size:14px; opacity:0.95;">Ημερομηνία αναφοράς: ${reportDate}</div>
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:760px; border-collapse:separate; border-spacing:0; background-color:#ffffff; border-radius:22px; overflow:hidden; box-shadow:0 8px 30px rgba(15,23,42,0.08);">
 
-            <div style="margin-top:20px; display:flex; flex-wrap:wrap; gap:10px;">
-              <div style="background:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700;">Προς αγορά: ${totalBuy}</div>
-              <div style="background:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700;">Χαμηλό απόθεμα: ${totalLow}</div>
-              <div style="background:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700;">Λήξεις φαρμάκων: ${totalExpiring}</div>
-              <div style="background:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700;">Συντηρήσεις: ${totalUpcoming}</div>
-            </div>
-          </div>
+            <tr>
+              <td style="background-color:#1565c0; padding:30px 24px; color:#ffffff;">
+                <div style="font-size:26px; font-weight:800; line-height:1.2;">
+                  Αναφορά Υλικών Εκκλησίας
+                </div>
+                <div style="margin-top:8px; font-size:14px; line-height:1.5; color:#dbeafe;">
+                  Ημερομηνία αναφοράς: ${reportDate}
+                </div>
 
-          <div style="padding:24px; background:#f6f8fb;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px; border-collapse:collapse;">
+                  <tr>
+                    <td style="padding:0 10px 10px 0;">
+                      <div style="display:inline-block; background-color:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700; color:#ffffff;">
+                        Προς αγορά: ${totalBuy}
+                      </div>
+                    </td>
+                    <td style="padding:0 10px 10px 0;">
+                      <div style="display:inline-block; background-color:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700; color:#ffffff;">
+                        Χαμηλό απόθεμα: ${totalLow}
+                      </div>
+                    </td>
+                    <td style="padding:0 10px 10px 0;">
+                      <div style="display:inline-block; background-color:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700; color:#ffffff;">
+                        Ληγμένα φάρμακα: ${totalExpired}
+                      </div>
+                    </td>
+                    <td style="padding:0 0 10px 0;">
+                      <div style="display:inline-block; background-color:rgba(255,255,255,0.16); padding:10px 14px; border-radius:12px; font-size:13px; font-weight:700; color:#ffffff;">
+                        Συντηρήσεις: ${totalUpcomingMaintenance}
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
 
-            ${createMainSection(
-              "Καθαριότητα",
-              "🧼",
-              createSubSection(
-                "Προς αγορά",
-                report["Καθαριότητα"].buy.length,
-                "#b91c1c",
-                createInventoryTable(report["Καθαριότητα"].buy, "buy")
-              ) +
-              createSubSection(
-                "Χαμηλό απόθεμα",
-                report["Καθαριότητα"].low.length,
-                "#d97706",
-                createInventoryTable(report["Καθαριότητα"].low, "low")
-              )
-            )}
+            <tr>
+              <td style="padding:24px; background-color:#f6f8fb;">
 
-            ${createMainSection(
-              "Τράπεζα Αγάπης",
-              "🛍️",
-              createSubSection(
-                "Προς αγορά",
-                report["Τράπεζα Αγάπης"].buy.length,
-                "#b91c1c",
-                createInventoryTable(report["Τράπεζα Αγάπης"].buy, "buy")
-              ) +
-              createSubSection(
-                "Χαμηλό απόθεμα",
-                report["Τράπεζα Αγάπης"].low.length,
-                "#d97706",
-                createInventoryTable(report["Τράπεζα Αγάπης"].low, "low")
-              )
-            )}
+                ${createUrgentSection()}
 
-            ${createMainSection(
-              "Φαρμακείο",
-              "💊",
-              createSubSection(
-                "Φάρμακα που λήγουν σύντομα",
-                report["Φαρμακείο"].expiring.length,
-                "#7c3aed",
-                createDateTable(report["Φαρμακείο"].expiring, "Ημερομηνία λήξης")
-              )
-            )}
+                ${createSummarySection()}
 
-            ${createMainSection(
-              "Συντήρηση",
-              "🛠️",
-              createSubSection(
-                "Εργασίες που πλησιάζουν",
-                report["Συντήρηση"].upcoming.length,
-                "#2563eb",
-                createDateTable(report["Συντήρηση"].upcoming, "Ημερομηνία")
-              )
-            )}
+                ${createInventorySection(
+                  "🧼",
+                  "Καθαριότητα",
+                  report.cleanliness.buy,
+                  report.cleanliness.low
+                )}
 
-          </div>
+                ${createInventorySection(
+                  "🛍️",
+                  "Τράπεζα Αγάπης",
+                  report.loveBank.buy,
+                  report.loveBank.low
+                )}
 
-          <div style="padding:18px 24px; background:#ffffff; border-top:1px solid #e5eaf0;">
-            <div style="font-size:12px; color:#6b7280; line-height:1.6;">
-              Το παρόν email δημιουργήθηκε αυτόματα από το αρχείο διαχείρισης υλικών της εκκλησίας.
-            </div>
-          </div>
+                ${createPharmacySection()}
 
-        </div>
-      </div>
-    </div>
+                ${createMaintenanceSection()}
+
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:18px 24px; background-color:#ffffff; border-top:1px solid #e5eaf0;">
+                <div style="font-size:12px; line-height:1.7; color:#6b7280;">
+                  Η αναφορά δημιουργήθηκε αυτόματα στις ${reportDate} από το σύστημα διαχείρισης υλικών της εκκλησίας.
+                </div>
+              </td>
+            </tr>
+
+          </table>
+
+        </td>
+      </tr>
+    </table>
+  </div>
+
+</body>
+</html>
   `;
 
-
-
-  // =====================================================
-  // ΔΗΜΙΟΥΡΓΙΑ ΑΠΛΟΥ TEXT EMAIL ΩΣ ΕΝΑΛΛΑΚΤΙΚΟ
-  // =====================================================
   let plainBody = `ΑΝΑΦΟΡΑ ΥΛΙΚΩΝ ΕΚΚΛΗΣΙΑΣ - ${reportDate}\n\n`;
 
+  plainBody += `ΣΥΝΟΨΗ\n`;
+  plainBody += `- Άμεσες ενέργειες: ${totalUrgent}\n`;
+  plainBody += `- Προς αγορά: ${totalBuy}\n`;
+  plainBody += `- Χαμηλό απόθεμα: ${totalLow}\n`;
+  plainBody += `- Ληγμένα φάρμακα: ${totalExpired}\n`;
+  plainBody += `- Συντηρήσεις: ${totalUpcomingMaintenance}\n\n`;
+
   plainBody += `ΚΑΘΑΡΙΟΤΗΤΑ\n`;
-  plainBody += `Προς αγορά: ${report["Καθαριότητα"].buy.length}\n`;
-  report["Καθαριότητα"].buy.forEach(row => {
-    plainBody += `- ${row.item} | Ποσότητα: ${row.qty} | Ελάχιστη: ${row.min} | Λείπουν: ${row.missing}\n`;
-  });
-  plainBody += `Χαμηλό απόθεμα: ${report["Καθαριότητα"].low.length}\n`;
-  report["Καθαριότητα"].low.forEach(row => {
-    plainBody += `- ${row.item} | Ποσότητα: ${row.qty} | Ελάχιστη: ${row.min}\n`;
-  });
+  if (report.cleanliness.buy.length === 0 && report.cleanliness.low.length === 0) {
+    plainBody += `- Δεν υπάρχουν εκκρεμότητες\n`;
+  } else {
+    if (report.cleanliness.buy.length > 0) {
+      plainBody += `Προς αγορά:\n`;
+      report.cleanliness.buy.forEach(row => {
+        plainBody += `- ${row.item} | Λείπουν: ${row.missing}\n`;
+      });
+    }
+    if (report.cleanliness.low.length > 0) {
+      plainBody += `Χαμηλό απόθεμα:\n`;
+      report.cleanliness.low.forEach(row => {
+        plainBody += `- ${row.item}\n`;
+      });
+    }
+  }
 
   plainBody += `\nΤΡΑΠΕΖΑ ΑΓΑΠΗΣ\n`;
-  plainBody += `Προς αγορά: ${report["Τράπεζα Αγάπης"].buy.length}\n`;
-  report["Τράπεζα Αγάπης"].buy.forEach(row => {
-    plainBody += `- ${row.item} | Ποσότητα: ${row.qty} | Ελάχιστη: ${row.min} | Λείπουν: ${row.missing}\n`;
-  });
-  plainBody += `Χαμηλό απόθεμα: ${report["Τράπεζα Αγάπης"].low.length}\n`;
-  report["Τράπεζα Αγάπης"].low.forEach(row => {
-    plainBody += `- ${row.item} | Ποσότητα: ${row.qty} | Ελάχιστη: ${row.min}\n`;
-  });
+  if (report.loveBank.buy.length === 0 && report.loveBank.low.length === 0) {
+    plainBody += `- Δεν υπάρχουν εκκρεμότητες\n`;
+  } else {
+    if (report.loveBank.buy.length > 0) {
+      plainBody += `Προς αγορά:\n`;
+      report.loveBank.buy.forEach(row => {
+        plainBody += `- ${row.item} | Λείπουν: ${row.missing}\n`;
+      });
+    }
+    if (report.loveBank.low.length > 0) {
+      plainBody += `Χαμηλό απόθεμα:\n`;
+      report.loveBank.low.forEach(row => {
+        plainBody += `- ${row.item}\n`;
+      });
+    }
+  }
 
   plainBody += `\nΦΑΡΜΑΚΕΙΟ\n`;
-  plainBody += `Φάρμακα που λήγουν σύντομα: ${report["Φαρμακείο"].expiring.length}\n`;
-  report["Φαρμακείο"].expiring.forEach(row => {
-    plainBody += `- ${row.item} | Λήξη: ${row.date}\n`;
-  });
+  if (report.pharmacy.expiringSoon.length === 0 && report.pharmacy.expired.length === 0) {
+    plainBody += `- Δεν υπάρχουν καταχωρήσεις\n`;
+  } else {
+    report.pharmacy.expiringSoon.forEach(row => {
+      plainBody += `- Λήγει σύντομα: ${row.item} | ${row.date}\n`;
+    });
+    report.pharmacy.expired.forEach(row => {
+      plainBody += `- Έληξε: ${row.item} | ${row.date}\n`;
+    });
+  }
 
   plainBody += `\nΣΥΝΤΗΡΗΣΗ\n`;
-  plainBody += `Εργασίες που πλησιάζουν: ${report["Συντήρηση"].upcoming.length}\n`;
-  report["Συντήρηση"].upcoming.forEach(row => {
-    plainBody += `- ${row.item} | Ημερομηνία: ${row.date}\n`;
-  });
+  if (report.maintenance.upcoming.length === 0) {
+    plainBody += `- Δεν υπάρχουν προσεχείς συντηρήσεις\n`;
+  } else {
+    report.maintenance.upcoming.forEach(row => {
+      plainBody += `- ${row.item} | ${row.date} | Απομένουν: ${row.daysLeft} μέρες\n`;
+    });
+  }
 
-
-
-  // =====================================================
-  // ΑΠΟΣΤΟΛΗ EMAIL
-  // =====================================================
   MailApp.sendEmail({
     to: recipient,
     subject: "Αναφορά Υλικών Εκκλησίας",
     body: plainBody,
     htmlBody: htmlBody
   });
-
 }
